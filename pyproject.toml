@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-nb = "nymbus.cli.main:app"
+nb = "nymbus.cli.main:run"
 
 [project.optional-dependencies]
 dev = [

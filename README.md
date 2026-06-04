@@ -557,3 +557,121 @@ nymbus/
 ```
 
 ---
+
+## Installation
+
+**Requirements:** Python 3.11+, pip.
+
+```bash
+git clone https://github.com/your-org/nymbus.git
+cd nymbus
+pip install -e .
+```
+
+> On Debian/Ubuntu you may need `--break-system-packages` or a virtualenv:
+> ```bash
+> python3 -m venv .venv && source .venv/bin/activate
+> pip install -e .
+> ```
+
+**Download the offline NER model** (required for person/org detection):
+
+```bash
+python -m spacy download en_core_web_sm
+```
+
+**Development install** (includes pytest + hypothesis):
+
+```bash
+pip install -e ".[dev]"
+pytest tests/
+```
+
+---
+
+## Quick start
+
+### 1. Create a config file
+
+```bash
+# in $PWD (or ~/.config/nb/nymbus.yaml)
+cat > nymbus.yaml << 'EOF'
+external_llm_model: "anthropic/claude-opus-4"   # the cloud LLM you query
+local_llm_model:    "ollama/mistral"            # local-only — used for Tier 2 + watchdog
+EOF
+```
+
+Set your API key (LiteLLM reads it directly from the environment):
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+### 2. Send a prompt
+
+```bash
+nb "scan all corp networks in acme-corp.internal"
+```
+
+```
+2 substitutions · watchdog ✓
+
+Here is a scan plan for zenith-corp.internal …
+```
+
+With the full transparency log:
+
+```bash
+nb -v "scan all corp networks in acme-corp.internal"
+```
+
+```
+╭─ Transparency Log ─────────────────────────────────────────────────╮
+│ [SUBST] acme-corp.internal → zenith-corp.internal  (FQDN)          │
+│ [SUBST] john.doe → marc.chen  (PERSON)                             │
+│ [OK] watchdog ① ② ③ passed                                         │
+╰────────────────────────────────────────────────────────────────────╯
+
+Here is a scan plan for zenith-corp.internal …
+```
+
+### 3. Pipe tool output through nymbus
+
+```bash
+cat nmap_report.xml | nb "summarise critical findings"
+nmap -sV 192.168.1.0/24 | nb "what services are exposed?"
+```
+
+### 4. Run a shell command, capture output, inject as context
+
+The `--` separator captures the command's stdout, anonymises it, and prepends it
+to the prompt:
+
+```bash
+nb "explain these results" -- nmap -sV 192.168.1.0/24
+nb "who has domain admin?" -- python bloodhound_query.py --find-da
+```
+
+### 5. Multi-turn sessions
+
+```bash
+export NB_SESSION=pentest-acme        # stick to one session in this shell
+
+nb "scan all corp networks in acme-corp.internal"
+nb "focus on port 443 — what certificates did you see?"
+nb "draft a remediation ticket for the first finding"
+
+nb session list                       # show saved sessions
+nb session export pentest-acme        # restore real values, dump transcript
+```
+
+### Fully local / air-gapped (Ollama only, no API keys)
+
+```bash
+ollama pull mistral
+cat > nymbus.yaml << 'EOF'
+external_llm_model: "ollama/mistral"
+local_llm_model:    "ollama/mistral"
+EOF
+nb "what open ports did you find?"
+```
