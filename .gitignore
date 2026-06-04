@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+.installed.cfg
+lib/
+lib64/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# mypy / pyright
+.mypy_cache/
+.pyright/
+
+# spaCy models (downloaded at runtime)
+en_core_web_sm/
+
+# nymbus runtime data — NEVER commit session files (contain pseudonym vault)
+~/.local/share/nb/
+*.nbs
+*.nbs.tmp
+shell_rules.yaml
+
+# Config with potential secrets
+nymbus.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Ollama / model weights
+*.gguf
+*.bin
+models/

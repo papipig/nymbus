@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nymbus"
+version = "0.1.0"
+description = "Identity abstraction bus — the anonymity layer for AI"
+requires-python = ">=3.11"
+dependencies = [
+    "typer[all]>=0.12",
+    "rich>=13",
+    "spacy>=3.7",
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "litellm>=1.40",
+    "pyyaml>=6",
+    "regex>=2024",
+]
+
+[project.scripts]
+nb = "nymbus.cli.main:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "hypothesis>=6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["nymbus"]
