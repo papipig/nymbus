@@ -46,11 +46,11 @@ whatweb some-target.com
 dirb http://some-target.com
 gobuster dir -u http://some-target.com -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt
 nikto -h some-target.com
-╭───────────────────────────────────────────────────────────────────────── Transparency Log ─────────────────────────────────────────────────────────────────────────╮
-│ [SUBST] some-target.com → zenith.com  (FQDN)                                                                                                                       │
-│ [OK] watchdog ① ② ③ passed                                                                                                                                         │
-│                                                                                                                                                                    │
-╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────── Transparency Log ──────────────────────────────╮
+│ [SUBST] some-target.com → zenith.com  (FQDN)                                   │
+│ [OK] watchdog (1) (2) (3) passed                                               │
+│                                                                                │
+╰────────────────────────────────────────────────────────────────────────────────╯
 ``````
 
 ---
