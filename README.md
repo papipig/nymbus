@@ -642,7 +642,7 @@ nb -v "scan all corp networks in acme-corp.internal"
 ╭─ Transparency Log ─────────────────────────────────────────────────╮
 │ [SUBST] acme-corp.internal → zenith-corp.internal  (FQDN)          │
 │ [SUBST] john.doe → marc.chen  (PERSON)                             │
-│ [OK] watchdog ① ② ③ passed                                         │
+│ [OK] watchdog (1) (2) (3) passed                                   │
 ╰────────────────────────────────────────────────────────────────────╯
 
 Here is a scan plan for zenith-corp.internal …
