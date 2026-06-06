@@ -36,10 +36,11 @@ class ShellRunner:
 
     # ── Public ─────────────────────────────────────────────────────────────────
 
-    def run(self, command: str) -> int | None:
+    def capture(self, command: str) -> str | None:
         """
-        Present the command to the user and execute it if approved.
-        Returns the exit code (or None if not executed).
+        Like :meth:`run` but returns the combined stdout+stderr as a string
+        instead of printing it.  Used for the ``--`` capture-and-inject flow.
+        Returns ``None`` if the command was denied or skipped by the user.
         """
         action = self._resolve(command)
 
@@ -47,18 +48,35 @@ class ShellRunner:
             console.print(f"[red][BLOCK][/] Shell command denied: {command!r}")
             return None
 
-        if action == "allow":
-            console.print(f"[green][EXEC][/] {command}")
-            return _execute(command)
-
-        # No pre-existing rule → interactive
-        if not self._confirm:
+        if not self._confirm and action != "allow":
             console.print(
                 f"[yellow][SKIP][/] No rule for command (--no-shell active): {command!r}"
             )
             return None
 
-        return self._prompt_and_run(command)
+        if action != "allow":
+            # Interactive prompt
+            console.print(f"\n[bold yellow]Capture output of:[/] {command!r}")
+            console.print(
+                "  [y] Execute once   [A] Always allow   [e] Edit   [n] Skip   [D] Always deny"
+            )
+            choice = _prompt_char()
+            if choice == "e":
+                command = typer.prompt("Edit command", default=command).strip() or command
+            elif choice == "a":
+                self._session_always[command] = "allow"
+                _save_rule(command, "allow")
+            elif choice == "d":
+                self._session_always[command] = "deny"
+                _save_rule(command, "deny")
+                console.print("[red]Command denied and rule saved.[/]")
+                return None
+            elif choice != "y":
+                console.print("[dim]Command skipped.[/]")
+                return None
+
+        console.print(f"[green][CAPTURE][/] {command}")
+        return _execute_capture(command)
 
     # ── Private ────────────────────────────────────────────────────────────────
 
@@ -81,29 +99,6 @@ class ShellRunner:
 
         return None
 
-    def _prompt_and_run(self, command: str) -> int | None:
-        console.print(f"\n[bold yellow]LLM suggested command:[/] {command!r}")
-        console.print(
-            "  [y] Execute once   [A] Always allow   [n] Skip   [D] Always deny"
-        )
-
-        choice = _prompt_char()
-        if choice == "y":
-            return _execute(command)
-        if choice == "A":
-            self._session_always[command] = "allow"
-            _save_rule(command, "allow")
-            return _execute(command)
-        if choice == "D":
-            self._session_always[command] = "deny"
-            _save_rule(command, "deny")
-            console.print("[red]Command denied and rule saved.[/]")
-            return None
-        # n or anything else
-        console.print("[dim]Command skipped.[/]")
-        return None
-
-
 # ── Module-level helpers ──────────────────────────────────────────────────────
 
 def _prompt_char() -> str:
@@ -125,6 +120,24 @@ def _execute(command: str) -> int:
     except Exception as exc:
         console.print(f"[red]Execution error:[/] {exc}")
         return 1
+
+
+def _execute_capture(command: str) -> str:
+    """Run *command* in a shell and return combined stdout+stderr as a string."""
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        output = result.stdout
+        if result.stderr:
+            output = output + result.stderr if output else result.stderr
+        return output
+    except Exception as exc:
+        return f"[capture error: {exc}]"
 
 
 def _load_rules() -> dict[str, RuleAction]:

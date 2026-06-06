@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from .detectors.base import Span, merge_spans
 from .detectors.custom_det import CustomDetector
 from .detectors.ner_det import NERDetector
@@ -10,7 +12,7 @@ from .watchdog import Watchdog
 from ..cli.transparency import Event, TransparencyLog
 
 # Types that are never substituted
-_PASSTHROUGH_TYPES = frozenset({"IPv4_PRIVATE", "CIDR_PRIVATE"})
+_PASSTHROUGH_TYPES = frozenset({"IPv4_PRIVATE", "CIDR_PRIVATE", "IPv6_PRIVATE"})
 
 
 class AnonymisationEngine:
@@ -40,7 +42,7 @@ class AnonymisationEngine:
 
     # ── Forward pass ──────────────────────────────────────────────────────────
 
-    def forward(self, text: str, log: TransparencyLog) -> str:
+    def forward(self, text: str, log: TransparencyLog, *, debug: bool = False) -> str:
         """
         Anonymise *text*.  Appends events to *log*.
         Returns the anonymised string.
@@ -49,9 +51,25 @@ class AnonymisationEngine:
         # Tier 1: detect
         spans = merge_spans([d.detect(text) for d in self._detectors])
 
+        if debug:
+            print("[debug] Tier-1 spans:", file=sys.stderr)
+            for sp in spans:
+                print(
+                    f"  [{sp.source}] {sp.type} @{sp.start}-{sp.end} "
+                    f"conf={sp.confidence:.0%} text={sp.text!r}",
+                    file=sys.stderr,
+                )
+
         # Tier 2: reclassify ambiguous spans via local LLM
         if self._local_llm:
             spans = self._reclassify(text, spans)
+            if debug:
+                print("[debug] After Tier-2 reclassification:", file=sys.stderr)
+                for sp in spans:
+                    print(
+                        f"  [{sp.source}] {sp.type} @{sp.start}-{sp.end} text={sp.text!r}",
+                        file=sys.stderr,
+                    )
 
         # Substitute (right → left to keep offsets valid)
         anon = text
@@ -75,7 +93,8 @@ class AnonymisationEngine:
         for w in warnings:
             log.add(Event("WARN", message=w))
         log.add(Event("OK", message="watchdog ① ② ③ passed"))
-
+        if debug:
+            print(f"[debug] Anonymised prompt:\n{anon}", file=sys.stderr)
         return anon
 
     # ── Backward pass ─────────────────────────────────────────────────────────

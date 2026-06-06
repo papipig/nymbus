@@ -32,86 +32,108 @@ multiple agents, long-running investigations, tool outputs (Nmap, BloodHound, Ne
 
 ---
 
+## Run example
+
+``````bash
+(.venv) user@machine:~/nymbus$ nb -v "suggest first reconnaissance commands to audit some-target.com"
+nmap -sS -A -T4 -p- some-target.com
+whois some-target.com
+dig some-target.com ANY
+dnsrecon -d some-target.com
+subfinder -d some-target.com
+amass enum -d some-target.com
+whatweb some-target.com
+dirb http://some-target.com
+gobuster dir -u http://some-target.com -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt
+nikto -h some-target.com
+╭───────────────────────────────────────────────────────────────────────── Transparency Log ─────────────────────────────────────────────────────────────────────────╮
+│ [SUBST] some-target.com → zenith.com  (FQDN)                                                                                                                       │
+│ [OK] watchdog ① ② ③ passed                                                                                                                                         │
+│                                                                                                                                                                    │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+``````
+
+---
+
 ## Design
 
 ### Three-layer decomposition
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  LAYER 1 — User Interface                                            │
-│  (runs on-premises, fully offline)                                   │
-│                                                                      │
+┌─────────────────────────────────────────────────────────────────────┐
+│  LAYER 1 — User Interface                                           │
+│  (runs on-premises, fully offline)                                  │
+│                                                                     │
 │  ┌─────────────┐  ┌──────────────────┐  ┌────────────────────────┐  │
 │  │  CLI        │  │  Internal agents │  │  Pipe / file input     │  │
 │  │  (single-   │  │  (scripts, loops)│  │  (nmap, burp, nessus…) │  │
 │  │   shot)     │  │                  │  │                        │  │
 │  └──────┬──────┘  └────────┬─────────┘  └────────────┬───────────┘  │
-│         └─────────────────┬┘                          │              │
-│                           └───────────────────────────┘              │
-│                                        │                             │
-│                              raw text / prompt                       │
-└────────────────────────────────────────┼─────────────────────────────┘
+│         └────────────────────────────────────────────┘              │
+│                                        │                            │
+│                              raw text / prompt                      │
+└────────────────────────────────────────┼────────────────────────────┘
                                          │
                                          ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  LAYER 2 — Anonymisation Proxy                                       │
-│  (runs on-premises, fully offline)                                   │
-│                                                                      │
-│   ┌──────────────────────────────────────────────────────────────┐   │
-│   │  AnonymisationEngine                                         │   │
-│   │                                                              │   │
-│   │  ┌─────────────────────────┐  ┌──────────────────────────┐    │   │
-│   │  │  Tier 1  (always runs)  │  │      Pseudonym Vault     │    │   │
-│   │  │  Regex + spaCy NER      │  │  real  ↔  isomorphic     │    │   │
-│   │  │  IP/CIDR/FQDN/email/…   │─▶│           fake           │    │   │
-│   │  │  persons / orgs / locs  │  │  203.0.113.42             │    │   │
-│   │  │  custom wordlists       │  │    ↕  198.51.100.7       │    │   │
-│   │  └─────────────────────────┘  │  acme-corp.internal      │    │   │
-│   │           │ ambiguous spans   │    ↕  zenith-corp…        │    │   │
-│   │           ▼                   │  john.doe                │    │   │
-│   │  ┌─────────────────────────┐  │    ↕  marc.chen          │    │   │
-│   │  │  Tier 2  (on demand)    │  │  (session-scoped,        │    │   │
-│   │  │  Local LLM              │─▶│   0600 JSON,            │    │   │
-│   │  │  type reclassifier      │  │   reversible)            │    │   │
-│   │  │  "Is 'Phoenix' here a   │  └──────────────────────────┘    │   │
-│   │  │   person or city?"      │  (backend: nymbus.yaml           │   │
-│   │  │  (ollama/mistral/…,     │   local_llm_model key)           │   │
-│   │  │  or any LiteLLM model   │                                   │   │
-│   │  │  string)                │                                   │   │
-│   │  └─────────────────────────┘                                   │   │
-│   │                                                              │   │
-│   │  ┌──────────────────────────────────────────────────────┐   │   │
-│   │  │  Watchdog  (runs on every pass, blocks on failure)   │   │   │
-│   │  │                                                      │   │   │
-│   │  │  FORWARD (before sending to external LLM)            │   │   │
-│   │  │  ① Completeness  deanon(anon(x)) == x ?              │   │   │
-│   │  │    ✗ → raise AnonymisationError, block               │   │   │
-│   │  │  ② Exact scan    real_val ∈ anon(x) ?                │   │   │
-│   │  │    ✗ → raise LeakDetectedError, log, block           │   │   │
-│   │  │  ③ LLM scan      "does anon(x) leak real data?"      │   │   │
-│   │  │    ✗ → block  (warn-only: --allow-semantic-warn)     │   │   │
-│   │  │                                                      │   │   │
-│   │  │  BACKWARD (after external LLM reply)                 │   │   │
-│   │  │  ④ Alias residue  alias ∈ deanon(reply) ?            │   │   │
-│   │  │    ✗ → warn (LLM hallucinated unknown identifier)    │   │   │
-│   │  └──────────────────────────────────────────────────────┘   │   │
-│   └──────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-│   forward pass  →  anonymised prompt  (only after watchdog ✓)        │
-│   backward pass ←  de-anonymised reply (only after watchdog ✓)       │
-└────────────────────────────────────────┬─────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  LAYER 2 — Anonymisation Proxy                                      │
+│  (runs on-premises, fully offline)                                  │
+│                                                                     │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │  AnonymisationEngine                                         │  │
+│   │                                                              │  │
+│   │  ┌─────────────────────────┐  ┌──────────────────────────┐   │  │
+│   │  │  Tier 1  (always runs)  │  │      Pseudonym Vault     │   │  │
+│   │  │  Regex + spaCy NER      │  │  real  ↔  isomorphic     │   │  │
+│   │  │  IP/CIDR/FQDN/email/…   │─▶│           fake           │   │  │
+│   │  │  persons / orgs / locs  │  │  203.0.113.42            │   │  │
+│   │  │  custom wordlists       │  │    ↕  198.51.100.7       │   │  │
+│   │  └─────────────────────────┘  │  acme-corp.internal      │   │  │
+│   │           │ ambiguous spans   │    ↕  zenith-corp…       │   │  │
+│   │           ▼                   │  john.doe                │   │  │
+│   │  ┌─────────────────────────┐  │    ↕  marc.chen          │   │  │
+│   │  │  Tier 2  (on demand)    │  │  (session-scoped,        │   │  │
+│   │  │  Local LLM              │─▶│   0600 JSON,             │   │  │
+│   │  │  type reclassifier      │  │   reversible)            │   │  │
+│   │  │  "Is 'Phoenix' here a   │  └──────────────────────────┘   │  │
+│   │  │   person or city?"      │  (backend: nymbus.yaml          │  │
+│   │  │  (ollama/mistral/…,     │   local_llm_model key)          │  │
+│   │  │  or any LiteLLM model   │                                 │  │
+│   │  │  string)                │                                 │  │
+│   │  └─────────────────────────┘                                 │  │
+│   │                                                              │  │
+│   │  ┌──────────────────────────────────────────────────────┐    │  │
+│   │  │  Watchdog  (runs on every pass, blocks on failure)   │    │  │
+│   │  │                                                      │    │  │
+│   │  │  FORWARD (before sending to external LLM)            │    │  │
+│   │  │  (1) Completeness  deanon(anon(x)) == x ?            |    │  │
+│   │  │    ✗ → raise AnonymisationError, block               │    │  │
+│   │  │  (2) Exact scan    real_val ∈ anon(x) ?              │    │  │
+│   │  │    ✗ → raise LeakDetectedError, log, block           │    │  │
+│   │  │  (3) LLM scan      "does anon(x) leak real data?"    │    │  │
+│   │  │    ✗ → block  (warn-only: --allow-semantic-warn)     │    │  │
+│   │  │                                                      │    │  │
+│   │  │  BACKWARD (after external LLM reply)                 │    │  │
+│   │  │  (4) Alias residue  alias ∈ deanon(reply) ?          │    │  │
+│   │  │    ✗ → warn (LLM hallucinated unknown identifier)    │    │  │
+│   │  └──────────────────────────────────────────────────────┘    │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│   forward pass  →  anonymised prompt  (only after watchdog ✓)       │
+│   backward pass ←  de-anonymised reply (only after watchdog ✓)      │
+└────────────────────────────────────────┬────────────────────────────┘
                                          │  anonymised text only
                                          ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  LAYER 3 — External LLM Connectors                                   │
-│  (cloud / third-party, untrusted)                                    │
-│                                                                      │
+┌─────────────────────────────────────────────────────────────────────┐
+│  LAYER 3 — External LLM Connectors                                  │
+│  (cloud / third-party, untrusted)                                   │
+│                                                                     │
 │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
 │   │  OpenAI      │  │  Anthropic   │  │  Mistral     │  …           │
 │   │  (GPT-4o…)   │  │  (Claude…)   │  │              │              │
 │   └──────────────┘  └──────────────┘  └──────────────┘              │
-│                  unified via LiteLLM adapter                         │
-└──────────────────────────────────────────────────────────────────────┘
+│                  unified via LiteLLM adapter                        │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -334,32 +356,6 @@ nb "what open ports did you find?" -- nmap -sV 192.168.1.0/24
 cat report.txt | nb "summarise critical findings"
 ```
 
-**LLM-generated commands**
-
-After receiving the external LLM's reply, the local LLM (`local_llm_model`)
-classifies whether it contains a shell command. This is the same model already
-used for Tier 2 and watchdog ③ — no extra dependency. If it returns a command,
-`nb` de-anonymises it and presents it for validation before executing anything
-(same approval flow as VS Code's agent command execution):
-
-```
-$ nb scan all corp networks in acme-corp.internal
-
-  ── anon ──────────────────────────────────────────────────────────
-  [SUBST]  acme-corp.internal  →  zenith-corp.internal   FQDN / org
-  [OK   ]  watchdog ① ② ③ passed
-  ──────────────────────────────────────────────────────────────────
-
-  ┌── suggested command ────────────────────────────────────────────┐
-  │  nmap -sV --open -T4 acme-corp.internal                        │
-  └─────────────────────────────────────────────────────────────────┘
-  [y] Execute   [e] Edit   [n] Cancel
-```
-
-The LLM reasoned with `zenith-corp.internal`; the user sees and runs
-`acme-corp.internal`. Output from the executed command is captured,
-anonymised, and fed back as context for the next turn.
-
 **Shell command execution**
 
 `nb` can run a shell command, capture its stdout, anonymise the output, and
@@ -431,7 +427,6 @@ in a split pane during long sessions.
 | `--allow-semantic-warn` | Downgrade watchdog ③ from hard block to warning |
 | `--model <string>` | Override `external_llm_model` for this session |
 | `--session <id>` | Resume a named session (vault + history restored); overrides `NB_SESSION` |
-| `--no-shell` | Disable `--` command execution entirely |
 
 > **`NB_SESSION`** — set this environment variable to make every `nb` invocation in the
 > current shell automatically attach to a named session without typing `--session`:
@@ -461,12 +456,12 @@ Every key can also be set as an environment variable using the `NB_` prefix
 # nymbus.yaml — full reference
 
 # ── Layer 3: external LLM (the model your prompts are sent to) ──────────────
-external_llm_model: "anthropic/claude-opus-4"   # any LiteLLM model string
+external_llm_model: "anthropic/claude-opus-4-8"  # any LiteLLM model string
+# external_llm_model: "anthropic/claude-4-sonnet-20250514"
 # external_llm_model: "openai/gpt-4o"
 # external_llm_model: "mistral/mistral-large-latest"
-# external_llm_model: "ollama/llama3"           # fully air-gapped, no API key needed
 
-# ── Layer 2: local LLM (Tier 2 reclassifier + watchdog ③ + command detect) ──
+# ── Layer 2: local LLM (Tier 2 reclassifier + watchdog ③) ──────────────────
 # MUST be a local/on-prem endpoint — watchdog ③ sends real vault values to
 # this model for semantic checking, so a cloud API would be a data leak.
 local_llm_model: "ollama/mistral"               # Mistral running locally via Ollama
@@ -476,6 +471,11 @@ local_llm_model: "ollama/mistral"               # Mistral running locally via Ol
 # local_llm_model: "openai/mistral"             # model name on your local server
 # local_llm_api_base: "http://localhost:8000"    # vLLM / llama.cpp / LM Studio
 tier2_threshold: 0.85   # spaCy NER confidence below this → escalate to Tier 2
+
+# ── System prompt ───────────────────────────────────────────────────────────
+# Prepended as a system message to every external LLM call.
+# The prompt is sent AS-IS (not anonymised) — keep it generic, no real data.
+system_prompt: "You are a security pentester agent working in a responsible disclosure context. You should answer user's requests to make the pentest progress. Answer with precise and concise answer, get rid of any disclaimer. Answer with plain terminal-style text, no markdown or any formatting."
 
 # ── Shell execution ──────────────────────────────────────────────────────────
 shell:
@@ -487,7 +487,7 @@ shell:
 Minimal config to get started (everything else defaults):
 
 ```yaml
-external_llm_model: "anthropic/claude-opus-4"
+external_llm_model: "anthropic/claude-4-sonnet-20250514"
 local_llm_model: "ollama/mistral"
 ```
 
@@ -514,7 +514,7 @@ If you use Ollama for both models (`ollama/…`), no API keys are needed at all.
 | Offline NER | `spaCy` + `en_core_web_sm` | Offline, well-maintained, fast CPU inference |
 | Data models / config | `pydantic` v2 | Validation, `.env` / YAML loading |
 | LLM routing | `litellm` | Single interface for 100+ providers |
-| Local LLM | any local inference server (Ollama, vLLM, llama.cpp…) via LiteLLM | Tier 2 reclassifier, watchdog ③, command detection — endpoint must be on-prem; a cloud API here would leak real vault values |
+| Local LLM | any local inference server (Ollama, vLLM, llama.cpp…) via LiteLLM | Tier 2 reclassifier, watchdog ③ — endpoint must be on-prem; a cloud API here would leak real vault values |
 | Tests | `pytest` + `hypothesis` | Property-based tests for round-trip correctness |
 
 ---
@@ -560,31 +560,44 @@ nymbus/
 
 ## Installation
 
-**Requirements:** Python 3.11+, pip.
+**Requirements:** Python 3.11+, python3-venv.
+
+On Debian/Ubuntu, install the venv package first if not already present:
+
+```bash
+sudo apt install -y python3.12-venv
+```
+
+Then clone, create a virtualenv, and install:
 
 ```bash
 git clone https://github.com/your-org/nymbus.git
 cd nymbus
-pip install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
-> On Debian/Ubuntu you may need `--break-system-packages` or a virtualenv:
-> ```bash
-> python3 -m venv .venv && source .venv/bin/activate
-> pip install -e .
-> ```
+All subsequent commands (`nb`, `python`, `pytest`, `spacy`) must be run inside the activated venv, or prefixed with `.venv/bin/`:
+
+```bash
+# either activate once per shell session:
+source .venv/bin/activate
+
+# or prefix every command:
+.venv/bin/nb "..."
+```
 
 **Download the offline NER model** (required for person/org detection):
 
 ```bash
-python -m spacy download en_core_web_sm
+.venv/bin/python -m spacy download en_core_web_sm
 ```
 
-**Development install** (includes pytest + hypothesis):
+**Run the test suite:**
 
 ```bash
-pip install -e ".[dev]"
-pytest tests/
+.venv/bin/pytest tests/
 ```
 
 ---
@@ -596,7 +609,7 @@ pytest tests/
 ```bash
 # in $PWD (or ~/.config/nb/nymbus.yaml)
 cat > nymbus.yaml << 'EOF'
-external_llm_model: "anthropic/claude-opus-4"   # the cloud LLM you query
+external_llm_model: "anthropic/claude-4-sonnet-20250514"   # the cloud LLM you query
 local_llm_model:    "ollama/mistral"            # local-only — used for Tier 2 + watchdog
 EOF
 ```

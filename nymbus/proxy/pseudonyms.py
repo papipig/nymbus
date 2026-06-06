@@ -247,3 +247,14 @@ def gen_credential(real: str, org_ns: dict[str, str], ctr: list[int]) -> str:
     # Keep key name, replace value with a hash-derived fake
     fake_val = hashlib.sha256(value.encode()).hexdigest()[: len(value)]
     return f"{key}={fake_val}"
+
+
+# RFC 3849 documentation prefix — 2001:db8::/32
+_IPV6_DOC_BASE = int(ipaddress.IPv6Address("2001:db8::"))
+
+
+def gen_ipv6(real: str, ip_ctr: list[int]) -> str:
+    """Replace IPv6 address with a documentation-range (2001:db8::/32) address."""
+    fake_int = _IPV6_DOC_BASE + ip_ctr[0] + 1
+    ip_ctr[0] += 1
+    return str(ipaddress.IPv6Address(fake_int))

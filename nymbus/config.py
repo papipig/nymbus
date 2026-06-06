@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 
 class Settings(BaseModel):
-    external_llm_model: str = "anthropic/claude-opus-4"
+    external_llm_model: str = "anthropic/claude-4-sonnet-20250514"
     local_llm_model: Optional[str] = None
     local_llm_api_base: Optional[str] = None
     tier2_threshold: float = 0.85
@@ -18,6 +18,9 @@ class Settings(BaseModel):
     shell_confirm: bool = True
     shell_allow: list[str] = []
     shell_deny: list[str] = []
+
+    # System prompt prepended to every external LLM call
+    system_prompt: Optional[str] = None
 
     # Custom detectors (loaded from nymbus.yaml)
     custom_patterns: list[str] = []   # list of regex strings
@@ -43,7 +46,7 @@ class Settings(BaseModel):
                 break
 
         # Environment variable overrides (NB_ prefix)
-        _str_keys = ("external_llm_model", "local_llm_model", "local_llm_api_base")
+        _str_keys = ("external_llm_model", "local_llm_model", "local_llm_api_base", "system_prompt")
         for key in _str_keys:
             env_val = os.environ.get(f"NB_{key.upper()}")
             if env_val is not None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from . import pseudonyms as ps
@@ -28,6 +29,10 @@ class PseudonymVault:
         self._person_ctr: list[int] = [0]
         self._ip_ctr: list[int] = [0]
 
+        # Secondary map: fake SLD stem → real SLD stem (e.g. "zenith" → "target")
+        # Used to reverse bare stems in LLM output (filenames, variable names, etc.)
+        self._stem_reverse: dict[str, str] = {}
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def anonymise(self, real: str, nb_type: str) -> str:
@@ -40,6 +45,9 @@ class PseudonymVault:
         # Guard against collision (two real values → same fake)
         if fake not in self._reverse:
             self._reverse[fake] = real
+        # Register bare SLD stems so the LLM's stem-only usage (filenames, etc.) gets reversed
+        if nb_type in ("FQDN", "URL", "EMAIL"):
+            self._register_stems(real, fake, nb_type)
         return fake
 
     def deanonymise(self, text: str) -> str:
@@ -47,6 +55,16 @@ class PseudonymVault:
         # Longest aliases first to avoid partial replacements
         for fake in sorted(self._reverse, key=len, reverse=True):
             text = text.replace(fake, self._reverse[fake])
+        # Bare-stem replacements: "zenith_subdomains.txt" → "target_subdomains.txt"
+        # Use negative lookahead/lookbehind on letters so we don't over-match inside words.
+        for fake_stem in sorted(self._stem_reverse, key=len, reverse=True):
+            real_stem = self._stem_reverse[fake_stem]
+            text = re.sub(
+                r'(?<![a-zA-Z])' + re.escape(fake_stem) + r'(?![a-zA-Z])',
+                real_stem,
+                text,
+                flags=re.IGNORECASE,
+            )
         return text
 
     def real_values(self) -> list[str]:
@@ -70,6 +88,7 @@ class PseudonymVault:
             "forward": self._forward,
             "fwd_type": self._fwd_type,
             "reverse": self._reverse,
+            "stem_reverse": self._stem_reverse,
             "org_ns": self._org_ns,
             "person_ns": {k: list(v) for k, v in self._person_ns.items()},
             "org_ctr": self._org_ctr[0],
@@ -83,6 +102,7 @@ class PseudonymVault:
         v._forward = data.get("forward", {})
         v._fwd_type = data.get("fwd_type", {})
         v._reverse = data.get("reverse", {})
+        v._stem_reverse = data.get("stem_reverse", {})
         v._org_ns = data.get("org_ns", {})
         v._person_ns = {k: tuple(val) for k, val in data.get("person_ns", {}).items()}  # type: ignore[misc]
         v._org_ctr = [data.get("org_ctr", 0)]
@@ -91,6 +111,21 @@ class PseudonymVault:
         return v
 
     # ── Generator dispatch ────────────────────────────────────────────────────
+
+    def _register_stems(self, real: str, fake: str, nb_type: str) -> None:
+        """Extract and store the SLD stem pair so bare stems in LLM output get reversed."""
+        if nb_type == "EMAIL":
+            real = real.split("@", 1)[-1] if "@" in real else real
+            fake = fake.split("@", 1)[-1] if "@" in fake else fake
+        elif nb_type == "URL":
+            # Strip scheme for FQDN extraction
+            real = re.sub(r'^https?://', '', real).split("/")[0]
+            fake = re.sub(r'^https?://', '', fake).split("/")[0]
+        _, real_sld, _ = ps.parse_fqdn(real)
+        _, fake_sld, _ = ps.parse_fqdn(fake)
+        if fake_sld and real_sld and fake_sld != real_sld:
+            if fake_sld not in self._stem_reverse:
+                self._stem_reverse[fake_sld] = real_sld
 
     def _generate(self, real: str, nb_type: str) -> str:  # noqa: PLR0911
         match nb_type:
@@ -127,5 +162,7 @@ class PseudonymVault:
                 return ps.gen_uuid(real)
             case "CREDENTIAL":
                 return ps.gen_credential(real, self._org_ns, self._org_ctr)
+            case "IPv6_PUBLIC" | "IPv6_PRIVATE":
+                return ps.gen_ipv6(real, self._ip_ctr)
             case _:
                 return real

@@ -35,7 +35,6 @@ class _State:
     allow_semantic_warn: bool = False
     model: str | None = None
     session_id: str | None = None
-    no_shell: bool = False
 
 
 state = _State()
@@ -59,7 +58,6 @@ def main_callback(
         envvar="NB_SESSION",
         help="Session ID (creates new session if not found).",
     ),
-    no_shell: bool = typer.Option(False, "--no-shell", help="Never execute suggested shell commands."),
 ) -> None:
     """Send a prompt through the nymbus anonymisation proxy."""
     # Sub-command path — do nothing here
@@ -72,7 +70,6 @@ def main_callback(
     state.log_file = log_file
     state.allow_semantic_warn = allow_semantic_warn
     state.model = model
-    state.no_shell = no_shell
 
     # Resolve prompt
     if prompt is None:
@@ -84,6 +81,23 @@ def main_callback(
     if not prompt:
         err_console.print("[red]Empty prompt.[/]")
         raise typer.Exit(1)
+
+    # Capture-and-inject: nb "explain" -- nmap …
+    import os
+    capture_cmd = os.environ.pop("_NB_CAPTURE_SHELL", "")
+    if capture_cmd:
+        settings_pre = _load_settings(model_override=model)
+        runner_pre = ShellRunner(
+            confirm=settings_pre.shell_confirm,
+            allow_patterns=settings_pre.shell_allow,
+            deny_patterns=settings_pre.shell_deny,
+        )
+        captured = runner_pre.capture(capture_cmd)
+        if captured is not None:
+            prompt = f"$ {capture_cmd}\n{captured.rstrip()}\n\n{prompt}"
+        else:
+            # User denied — proceed with original prompt only
+            pass
 
     # Session
     session_id = session or str(uuid.uuid4())
@@ -104,6 +118,7 @@ def main_callback(
             prompt,
             allow_semantic_warn=allow_semantic_warn,
             log=log,
+            debug=debug,
         )
     except Exception as exc:
         err_console.print(f"[red]Error:[/] {exc}")
@@ -127,10 +142,6 @@ def main_callback(
     # Log to file
     if log_file:
         _append_log_file(log_file, session_id, prompt, real_reply, log, verbose)
-
-    # Shell command detection
-    if not no_shell:
-        _maybe_run_shell(real_reply, settings)
 
 
 # ── Session sub-commands ───────────────────────────────────────────────────────
@@ -229,44 +240,39 @@ def _append_log_file(
     Path(path).open("a").write("\n".join(lines) + "\n")
 
 
-def _maybe_run_shell(reply: str, settings: Settings) -> None:
-    """If local LLM detects a shell command in the reply, offer to run it."""
-    if not settings.local_llm_model:
-        return
-    from ..proxy.local_llm import LocalLLM
-    llm = LocalLLM(settings)
-    cmd = llm.detect_command(reply)
-    if cmd:
-        runner = ShellRunner(
-            confirm=settings.shell_confirm,
-            allow_patterns=settings.shell_allow,
-            deny_patterns=settings.shell_deny,
-        )
-        runner.run(cmd)
-
-
 # ── Entry-point split at '--' for inline shell commands ──────────────────────
 
 def _preprocess_argv() -> None:
     """
-    Allow:  nb [nb-flags] -- shell command
-    The part after '--' is treated as a raw shell command to be run immediately
-    (no LLM call — just executes after user approval).
+    Allow:  nb [nb-flags] [prompt] -- shell command
+
+    When a prompt is present alongside the shell command the output is captured
+    and prepended to the prompt (capture-and-inject mode).  When there is no
+    prompt the command is run immediately with no LLM call (execute-only mode).
     """
-    if "--" in sys.argv:
-        idx = sys.argv.index("--")
-        nb_args = sys.argv[1:idx]
-        shell_cmd = " ".join(sys.argv[idx + 1 :])
-        sys.argv[1:] = nb_args
-        # Stash command for use by the main callback
-        if shell_cmd:
-            import os
-            os.environ["_NB_INLINE_SHELL"] = shell_cmd
+    if "--" not in sys.argv:
+        return
+    idx = sys.argv.index("--")
+    nb_args = sys.argv[1:idx]
+    shell_cmd = " ".join(sys.argv[idx + 1:])
+    sys.argv[1:] = nb_args
+    if not shell_cmd:
+        return
+    import os
+    # Detect whether there is a prompt argument among the remaining nb_args
+    has_prompt = any(a for a in nb_args if not a.startswith("-"))
+    if has_prompt:
+        os.environ["_NB_CAPTURE_SHELL"] = shell_cmd
+    else:
+        os.environ["_NB_INLINE_SHELL"] = shell_cmd
 
 
 def run() -> None:
+    import os
     _preprocess_argv()
-    inline = __import__("os").environ.pop("_NB_INLINE_SHELL", "")
+
+    # Execute-only mode: no prompt, just run the shell command
+    inline = os.environ.pop("_NB_INLINE_SHELL", "")
     if inline:
         settings = _load_settings()
         runner = ShellRunner(
@@ -275,4 +281,5 @@ def run() -> None:
             deny_patterns=settings.shell_deny,
         )
         raise SystemExit(runner.run(inline) or 0)
+
     app()

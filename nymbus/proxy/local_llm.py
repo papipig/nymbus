@@ -36,14 +36,6 @@ Anonymised text to audit:
 Does the anonymised text reveal or allow inference of any sensitive value above?
 Reply with exactly "CLEAN" if there is no leak, or "LEAK: <brief reason>" if there is."""
 
-_COMMAND_PROMPT = """\
-Extract the primary shell command from the text below, if one is present.
-Reply with only the command string.
-If there is no shell command, reply with "NONE".
-
-Text:
-{reply}"""
-
 
 class LocalLLM:
     """Thin wrapper around LiteLLM for the local inference endpoint."""
@@ -100,14 +92,3 @@ class LocalLLM:
             return self._call(prompt)
         except Exception as exc:
             return f"CLEAN  # local LLM error: {exc}"
-
-    def detect_command(self, reply: str) -> str | None:
-        """Return a shell command if the reply contains one, else None."""
-        prompt = _COMMAND_PROMPT.format(reply=reply[:2000])
-        try:
-            result = self._call(prompt).strip()
-        except Exception:
-            return None
-        if result.upper() == "NONE" or not result:
-            return None
-        return result

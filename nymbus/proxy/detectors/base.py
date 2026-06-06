@@ -10,6 +10,8 @@ _TYPE_PRIORITY: dict[str, int] = {
     "IPv4_PRIVATE": 90,
     "IPv4_PUBLIC": 90,
     "IPv6": 90,
+    "IPv6_PRIVATE": 90,
+    "IPv6_PUBLIC": 90,
     "MAC": 80,
     "EMAIL": 70,
     "URL": 70,

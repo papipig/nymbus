@@ -59,3 +59,6 @@ Thumbs.db
 *.gguf
 *.bin
 models/
+
+# Other
+api_key

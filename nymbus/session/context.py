@@ -81,6 +81,7 @@ class Session:
         *,
         allow_semantic_warn: bool = False,
         log: TransparencyLog | None = None,
+        debug: bool = False,
     ) -> tuple[str, TransparencyLog]:
         """
         Anonymise *user_text*, call the external LLM, de-anonymise reply.
@@ -98,12 +99,16 @@ class Session:
             local_llm=self._local_llm,
         )
 
-        anon_prompt = engine.forward(user_text, log)
+        anon_prompt = engine.forward(user_text, log, debug=debug)
 
         self._history.append({"role": "user", "content": anon_prompt})
 
+        messages = self._history
+        if self._settings.system_prompt:
+            messages = [{"role": "system", "content": self._settings.system_prompt}] + messages
+
         connector = LiteLLMConnector(self._settings)
-        anon_reply = connector.complete(self._history)
+        anon_reply = connector.complete(messages)
 
         self._history.append({"role": "assistant", "content": anon_reply})
 

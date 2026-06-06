@@ -8,11 +8,30 @@ from .base import Detector, Span
 _OCTET = r"(?:25[0-5]|2[0-4]\d|[01]?\d\d?)"
 _IPV4 = rf"(?:{_OCTET}\.){{3}}{_OCTET}"
 
+# IPv6 — covers full, compressed (::), and loopback/unspecified forms.
+# Validated afterwards with ipaddress.ip_address() to eliminate false positives.
+_H = r"[0-9a-fA-F]{1,4}"
+_IPV6 = (
+    rf"(?:{_H}:){{7}}{_H}"                               # full 8-group
+    rf"|(?:{_H}:){{1,7}}:"                                # trailing ::
+    rf"|:(?::{_H}){{1,7}}"                                # leading ::
+    rf"|(?:{_H}:){{1,6}}:{_H}"                           # one :: skip in middle
+    rf"|(?:{_H}:){{1,5}}(?::{_H}){{1,2}}"
+    rf"|(?:{_H}:){{1,4}}(?::{_H}){{1,3}}"
+    rf"|(?:{_H}:){{1,3}}(?::{_H}){{1,4}}"
+    rf"|(?:{_H}:){{1,2}}(?::{_H}){{1,5}}"
+    rf"|{_H}:(?::{_H}){{1,6}}"
+    r"|::1"                                               # loopback
+)
+
 # Ordered list of (label, compiled_pattern).  More-specific patterns first.
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # CIDR before bare IPv4
     ("CIDR", re.compile(rf"\b{_IPV4}/(?:3[0-2]|[12]?\d)\b")),
     ("IPv4", re.compile(rf"\b{_IPV4}\b")),
+    # IPv6 — validated in _resolve_type; placed after IPv4/CIDR so IPv4-mapped
+    # addresses ending with an IPv4 quad are already claimed.
+    ("IPv6", re.compile(rf"(?<![:/\w])(?:{_IPV6})(?![:/\w])")),
     # MAC (colon or hyphen separated)
     (
         "MAC",
@@ -72,6 +91,14 @@ def _resolve_type(label: str, text: str) -> str:
             return "IPv4_PRIVATE" if (addr.is_private or addr.is_loopback) else "IPv4_PUBLIC"
         except ValueError:
             return "IPv4_PUBLIC"
+    if label == "IPv6":
+        try:
+            addr = ipaddress.ip_address(text)
+            if not isinstance(addr, ipaddress.IPv6Address):
+                return ""  # sentinel: invalid — will be filtered out
+            return "IPv6_PRIVATE" if (addr.is_private or addr.is_loopback or addr.is_link_local) else "IPv6_PUBLIC"
+        except ValueError:
+            return ""  # invalid candidate — skip
     return label
 
 
@@ -86,6 +113,8 @@ class RegexDetector(Detector):
                 if claimed.intersection(range(s, e)):
                     continue
                 nb_type = _resolve_type(label, m.group())
+                if not nb_type:  # empty string signals an invalid candidate (e.g. bad IPv6)
+                    continue
                 spans.append(
                     Span(start=s, end=e, text=m.group(), type=nb_type, source="regex")
                 )
